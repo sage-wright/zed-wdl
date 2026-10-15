@@ -1,0 +1,5 @@
+name = "WDL Shell"
+grammar = "bash"
+hidden = true
+path_suffixes = []
+line_comments = ["# "]

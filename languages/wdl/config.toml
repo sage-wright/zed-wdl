@@ -2,3 +2,11 @@ name = "WDL"
 grammar = "wdl"
 path_suffixes = ["wdl"]
 line_comments = ["# ", "## "]
+autoclose_before = "}])"
+brackets = [
+  { start = "{", end = "}", close = true, newline = true },
+  { start = "[", end = "]", close = true, newline = true },
+  { start = "(", end = ")", close = true, newline = true },
+  { start = "\"", end = "\"", close = true, newline = false, not_in = ["string", "comment"] },
+  { start = "'", end = "'", close = true, newline = false, not_in = ["string", "comment"] },
+]

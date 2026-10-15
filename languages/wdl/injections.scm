@@ -1,9 +1,4 @@
-; Command blocks that contain a python heredoc (python/python3 <<EOF) → Python
-((command_parts) @injection.content
- (#match? @injection.content "python[0-9.]*[ \t]+(-[ \t]*)?<<")
- (#set! injection.language "python"))
-
-; Everything else → bash
-((command_parts) @injection.content
- (#not-match? @injection.content "python[0-9.]*[ \t]+(-[ \t]*)?<<")
- (#set! injection.language "bash"))
+((command_block_heredoc (command_text_heredoc) @injection.content) @injection.host
+ (#set! injection.language "WDL Shell"))
+((command_block_curly (command_text_curly) @injection.content) @injection.host
+ (#set! injection.language "WDL Shell"))

@@ -7,9 +7,9 @@ description = "Syntaxt highlighting and LSP support for the Workflow Description
 repository = "https://github.com/broadinstitute/zed-wdl"
 
 [grammars.wdl]
-repository = "https://github.com/broadinstitute/tree-sitter-wdl"
-commit = "e0ea84c0a38fac0122c2bf0692806250b83995fe"
+repository = "https://github.com/stjude-rust-labs/tree-sitter-wdl"
+commit = "9ccae12685d890383966baa5be1df17b3b407654"
 
-[language_servers.wdl]
+[language_servers.sprocket]
 languages = ["WDL"]
-name = "wdl-lsp"
+name = "Sprocket"

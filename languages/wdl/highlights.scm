@@ -1,113 +1,200 @@
-(version) @keyword
+; Keywords
 
-(version
-    identifier: (float) @number)
+[
+  "version"
+  "import"
+  "struct"
+  "enum"
+  "task"
+  "workflow"
+  "input"
+  "output"
+  "command"
+  "runtime"
+  "requirements"
+  "hints"
+  "meta"
+  "parameter_meta"
+] @keyword
+
+[
+  "if"
+  "then"
+  "else"
+  "scatter"
+  "call"
+] @keyword
+
+[
+  "as"
+  "alias"
+  "in"
+  "after"
+  "object"
+  "env"
+] @keyword
+
+; Types
+
+(primitive_type) @type.builtin
+
+[
+  "Array"
+  "Map"
+  "Pair"
+] @type.builtin
+
+(object_type) @type.builtin
+
+(user_type
+  (identifier) @type)
+
+; Literals
+
+(boolean_literal) @boolean
+[
+  (null_literal)
+  (none_literal)
+  (left_literal)
+  (right_literal)
+] @constant.builtin
+(integer_literal) @number
+(float_literal) @number
+(meta_number) @number
+
+; Strings
+
+(single_quoted_string) @string
+(double_quoted_string) @string
+(multi_line_string) @string
+(string_text_single) @string
+(string_text_double) @string
+(multi_line_string_text) @string
+(escape_sequence) @string.escape
+
+; Placeholders
+
+(placeholder
+  ["~{" "${"] @punctuation.special
+  "}" @punctuation.special)
+
+(string_placeholder
+  ["~{" "${"] @punctuation.special
+  "}" @punctuation.special)
+
+; Comments
 
 (comment) @comment
 
-(placeholder) @variable
-(option_key) @attribute
+; Version
 
-(string) @string
-(simple_string) @string
+(version_identifier) @number
 
-(identifier) @variable
-
-(struct_field
-    name: (identifier) @attribute)
-
-(field_expression
-    name: (identifier) @attribute)
-
-(meta_attribute
-    name: (identifier) @attribute)
-
-(runtime_attribute
-    name: (identifier) @attribute)
-
-(dec_int) @number
-(float) @number
-
-(user_type
-    name: (identifier) @type)
-(file_type) @type.builtin
-(int_type) @type.builtin
-(float_type) @type.builtin
-(string_type) @type.builtin
-(object_type) @type.builtin
+; Operators
 
 [
-    "Array"
-    "Map"
-    "Pair"
-] @type.builtin
+  "="
+  "=="
+  "!="
+  "<"
+  "<="
+  ">"
+  ">="
+  "+"
+  "-"
+  "*"
+  "/"
+  "%"
+  "||"
+  "&&"
+  "!"
+  "?"
+] @operator
 
-(apply_expression
-    name: (identifier) @function.builtin
-    (#any-of? @function.builtin
-        "floor" "ceil" "round" "min" "max"
-        "sub" "basename" "glob" "size" "stdout" "stderr"
-        "read_string" "read_int" "read_float" "read_boolean" "read_lines" "write_lines"
-        "read_tsv" "write_tsv" "read_map" "write_map" "read_json" "write_json"
-        "read_object" "read_objects" "write_object" "write_objects"
-        "prefix" "suffix" "quote" "squote" "sep" "length" "range" "transpose" "cross" "zip"
-        "unzip" "flatten" "select_first" "select_all" "as_pairs" "as_map" "keys" "collect_by_key"
-        "defined"))
+; Punctuation
 
 [
-    "["
-    "]"
-    "{"
-    "}"
-    "("
-    ")"
+  "{"
+  "}"
+  "["
+  "]"
+  "("
+  ")"
+  "<<<"
+  ">>>"
 ] @punctuation.bracket
 
 [
-    "."
-    ","
-    ":"
-] @punctuation
+  ","
+  ":"
+  "."
+] @punctuation.delimiter
 
-[
-    "-"
-    "!"
-    "?"
-    "=="
-    "!="
-    "||"
-    "&&"
-    "+"
-    "*"
-    "/"
-    "%"
-    ">"
-    ">="
-    "<"
-    "<="
-    "="
-] @operator
+; Definitions
 
-[
-    "if"
-    "then"
-    "else"
-    "version"
-    "import"
-    "as"
-    "alias"
-    "struct"
-    "workflow"
-    "task"
-    "input"
-    "output"
-    "call"
-    "scatter"
-    "in"
-    "command"
-    "runtime"
-    "meta"
-    "parameter_meta"
-] @keyword
+(struct
+  (identifier) @type.definition)
 
+(enum
+  (identifier) @type.definition)
 
+(task
+  (identifier) @function.definition)
+
+(workflow
+  (identifier) @function.definition)
+
+; Declarations
+
+(declaration
+  (identifier) @variable)
+
+(bound_declaration
+  (identifier) @variable)
+
+; Meta
+
+(meta_attribute
+  (identifier) @property)
+
+(runtime_attribute
+  (identifier) @property)
+
+; Call
+
+(call
+  (qualified_identifier) @function)
+
+(call_input
+  (identifier) @variable)
+
+; Scatter
+
+(scatter
+  "(" (identifier) @variable "in")
+
+; Functions
+
+(apply_expression
+  (identifier) @function.builtin)
+
+; Member access
+
+(member_expression
+  "." (identifier) @property)
+
+; Import
+
+(import
+  "as" (identifier) @namespace)
+
+(import_alias
+  (identifier) @function . "as" (identifier) @function)
+
+; Struct literal
+
+(struct_literal
+  (identifier) @type)
+
+(object_field
+  (identifier) @property)
