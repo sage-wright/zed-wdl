@@ -103,8 +103,8 @@ impl zed::Extension for WdlExtension {
         }
 
         let python = worktree.which("python3").ok_or(
-            "python3 is needed to filter Sprocket diagnostics; install it, or set \
-             lsp.sprocket.settings.hide_diagnostics to \"\" to turn filtering off",
+          "python3 is needed to filter Sprocket diagnostics; install it, or set \
+           lsp.sprocket.settings.type_mismatches to true and hide_diagnostics to \"\"",
         )?;
         let script = env::current_dir()
             .map_err(|e| e.to_string())?
