@@ -1,10 +1,7 @@
 WDL extension for Zed
 =====================
 
-This extension provides support for the [Workflow Description Language (WDL)](https://openwdl.org/)
-in the [Zed](https://zed.dev) code editor. It supports WDL 1.0 through 1.3, using the
-[St. Jude tree-sitter grammar](https://github.com/stjude-rust-labs/tree-sitter-wdl) and the
-[Sprocket](https://github.com/stjude-rust-labs/sprocket) language server.
+This extension provides support for the [Workflow Description Language (WDL)](https://openwdl.org/) in the [Zed](https://zed.dev) code editor. It supports WDL 1.0 through 1.3, using a fork of the [St. Jude tree-sitter grammar](https://github.com/sage-wright/tree-sitter-wdl) that includes WDL 1.0 command fixes, and the [Sprocket](https://github.com/stjude-rust-labs/sprocket) language server.
 
 ## Features
 
@@ -30,6 +27,7 @@ in the [Zed](https://zed.dev) code editor. It supports WDL 1.0 through 1.3, usin
 * Automatic indentation
 * Automatic closing of brackets and quotes
 * Diagnostics from the Sprocket language server, with configurable linting and filtering
+* Support for `~{sep=...}`, `~{default=...}`, and `~{true=... false=....}`, and bash `~${...}` highlighted as bash inside `<<< >>>` commands
 
 ## Preview
 
@@ -158,5 +156,6 @@ terminal.
 
 * [stjude-rust-labs/tree-sitter-wdl](https://github.com/stjude-rust-labs/tree-sitter-wdl): Tree-sitter grammar for WDL
 * [stjude-rust-labs/sprocket](https://github.com/stjude-rust-labs/sprocket): WDL language server and toolkit
-* [tree-sitter/tree-sitter-bash](https://github.com/tree-sitter/tree-sitter-bash): bash grammar; its
-  highlight query is used for command blocks (MIT license, see `languages/wdl-shell/highlights.scm`)
+* [Zed](https://github.com/zed-industries/zed): the bash highlight query in
+  `languages/wdl-shell/highlights.scm` comes from Zed and is licensed GPL-3.0-or-later
+  (see `languages/wdl-shell/LICENSE-GPL`)

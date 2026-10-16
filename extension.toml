@@ -11,7 +11,7 @@ repository = "https://github.com/broadinstitute/zed-wdl"
 
 [grammars.wdl]
 repository = "https://github.com/sage-wright/tree-sitter-wdl"
-commit = "b24f535d7a3a864fa88465ed832307be4449ac5d"
+commit = "1674d539baf7ee4b5fb65be830e169ae35421c9b"
 
 [language_servers.sprocket]
 languages = ["WDL"]
