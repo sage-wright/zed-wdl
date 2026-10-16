@@ -1,14 +1,17 @@
 id = "wdl"
 name = "Workflow Description Language"
-version = "0.0.1"
+version = "0.1.0"
 schema_version = 1
-authors = ["Lucas van Dijk <lvandijk@broadinstitute.org>"]
-description = "Syntaxt highlighting and LSP support for the Workflow Description Language (WDL)."
+authors = [
+  "Lucas van Dijk <lvandijk@broadinstitute.org>",
+  "Sage Wright <sage.wright@theiagen.com>",
+]
+description = "WDL 1.0–1.3 support: syntax highlighting with embedded bash/Python/R in command blocks, outline, and Sprocket LSP diagnostics."
 repository = "https://github.com/broadinstitute/zed-wdl"
 
 [grammars.wdl]
-repository = "https://github.com/stjude-rust-labs/tree-sitter-wdl"
-commit = "9ccae12685d890383966baa5be1df17b3b407654"
+repository = "https://github.com/sage-wright/tree-sitter-wdl"
+commit = "b24f535d7a3a864fa88465ed832307be4449ac5d"
 
 [language_servers.sprocket]
 languages = ["WDL"]

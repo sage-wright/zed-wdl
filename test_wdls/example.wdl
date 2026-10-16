@@ -1,4 +1,9 @@
-version 1.1
+version 1.2
+
+## Example file for checking the extension's features:
+##   * WDL 1.2 syntax (env inputs, else if, requirements, hints)
+##   * outline: structs, workflow, tasks and calls appear in the outline panel
+##   * embedded-language highlighting inside command blocks (see task EmbeddedLanguages)
 
 import "local.wdl" as local alias Foo as Bar
 import "https://example.com/remote.wdl" as remote alias Baz as Blorf
@@ -26,6 +31,7 @@ workflow Workflow1 {
 
     Float f = i + 1.0
     Array[File] file_array = if defined(ex) then select_all(select_first([ex]).a) else []
+    String size_class = if i > 100 then "large" else if i > 10 then "medium" else "small"
 
     call local.foo
     call local.foo as bar {}
@@ -46,8 +52,12 @@ workflow Workflow1 {
         }
     }
 
+    call Task1 { name = s }
+    call EmbeddedLanguages { samplename = s, reads = file_array }
+
     output {
-        File f = task1.name_file
+        File name_file = Task1.name_file
+        File report = EmbeddedLanguages.report
     }
 
     meta {
@@ -71,51 +81,140 @@ task Task1 {
     input {
         String name
         Example2? ex
-        String docker_image
+        String docker_image = "debian:bookworm-slim"
+        env String GREETING = "hello"
     }
 
+    # Plain bash: shell keywords, strings and variables are highlighted as bash,
+    # while ~{...} placeholders keep WDL highlighting.
     command <<<
         set -euxo pipefail
 
-        echo "name: ~{name}"
-        echo "ex: ~{default="" ex}" \
+        echo "$GREETING, name: ~{name}" \
             | cat
-        
-        echo "\>>>"
-        
+
         if [[ "test" =~ \.fastq ]]; then
             echo "yes"
         else
             echo "no"
         fi
-        
-        echo "~{sep=" " ['John', 'Doe']}"
+
         echo "~{sep(" ", ['John', 'Doe'])}"
         echo "~{if defined(ex) then "yes" else "no"}"
+
+        # A plain heredoc that is not fed to an interpreter stays a bash string.
+        cat <<EOF | tee notes.txt
+        just some text for ~{name}
+        EOF
     >>>
 
     output {
         File name_file = stdout()
     }
-    
-    RuntimeAttr default_attr = object {
-        cpu_cores:          2,
-        mem_gb:             16,
-        disk_gb:            disk_size,
-        boot_disk_gb:       20,
-        preemptible_tries:  3,
-        max_retries:        2,
-        docker:             "debian:bookworm-slim"
-    }
-    RuntimeAttr runtime_attr = select_first([runtime_attr_override, default_attr])
-    
 
-    runtime {
+    requirements {
         container: docker_image
-        disks: "local-disk 10 SSD"
+        cpu: 1
+        memory: "2 GiB"
+    }
+
+    hints {
+        disks: "10 GiB"
     }
 
     meta {
         description: "write name to file"
+    }
+}
+
+task EmbeddedLanguages {
+    input {
+        String samplename
+        Array[File] reads
+        Int cpu = 2
+    }
+
+    command <<<
+        set -euo pipefail
+
+        # Python heredoc (python, python3, pypy and full paths like /usr/bin/python3)
+        python3 <<CODE
+        import json
+        import sys
+
+        reads = "~{sep(",", reads)}".split(",")
+        summary = {"sample": "~{samplename}", "n_reads": len(reads)}
+        with open("summary.json", "w") as fh:
+            json.dump(summary, fh, indent=2)
+        print(f"wrote summary for {summary['sample']}", file=sys.stderr)
+        CODE
+
+        # Interpreter heredocs work inside pipelines too
+        /usr/bin/python3 - <<'PY' | sort > sorted.txt
+        for name in ["b", "a", "c"]:
+            print(name)
+        PY
+
+        # R heredocs (Rscript or R)
+        Rscript - <<'RSCRIPT'
+        summary <- jsonlite::fromJSON("summary.json")
+        write.csv(data.frame(sample = summary$sample, n = summary$n_reads), "summary.csv")
+        RSCRIPT
+
+        R --vanilla --no-save <<'RCODE'
+        x <- seq(1, 10)
+        print(mean(x))
+        RCODE
+
+        # Perl, JavaScript (node), Julia and SQL heredocs
+        perl <<'PERL'
+        my @fields = split(/\t/, "a\tb\tc");
+        print scalar(@fields), "\n";
+        PERL
+
+        node <<'JS'
+        const counts = { a: 1, b: 2 };
+        console.log(JSON.stringify(counts));
+        JS
+
+        julia <<'JULIA'
+        println(sum([1, 2, 3]))
+        JULIA
+
+        sqlite3 results.db <<'SQL'
+        CREATE TABLE IF NOT EXISTS runs (sample TEXT, n_reads INTEGER);
+        SELECT COUNT(*) FROM runs;
+        SQL
+
+        # A heredoc written to a file is highlighted by the file's extension
+        cat > plot.R <<'EOF'
+        png("plot.png")
+        plot(1:10, main = "example")
+        dev.off()
+        EOF
+
+        cat <<'EOF' > config.json
+        {"threads": ~{cpu}, "sample": "~{samplename}"}
+        EOF
+
+        # Inline code in double-quoted -c / -e arguments
+        python3 -c "import sys; print(sys.version)"
+        Rscript -e "cat(R.version.string)"
+        perl -e "print 42"
+
+        # Single-quoted inline code is NOT highlighted (known limitation)
+        Rscript -e 'cat("not highlighted")'
+
+        echo "report for ~{samplename}" > report.txt
+    >>>
+
+    output {
+        File report = "report.txt"
+        File summary_json = "summary.json"
+    }
+
+    requirements {
+        container: "python:3.12-slim"
+        cpu: cpu
     }
 }

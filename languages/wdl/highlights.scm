@@ -198,3 +198,11 @@
 
 (object_field
   (identifier) @property)
+
+; Deprecated placeholder options: ~{sep=" " x}, ~{default="" y}, ~{true="a" false="b" z}
+(placeholder_option name: _ @property)
+(placeholder_option "=" @operator)
+
+; Placeholder braces: placed after the generic bracket rule so they take precedence
+(placeholder "}" @punctuation.special)
+(string_placeholder "}" @punctuation.special)
