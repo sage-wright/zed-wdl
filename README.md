@@ -29,9 +29,10 @@ This extension provides support for the [Workflow Description Language (WDL)](ht
 * Diagnostics from the Sprocket language server, with configurable linting and filtering
 * Support for `~{sep=...}`, `~{default=...}`, and `~{true=... false=....}`, and bash `~${...}` highlighted as bash inside `<<< >>>` commands
 
-## Preview
+## Previews
 
-<img src="doc/screenshot.png" alt="Screenshot of WDL code in Zed" width="750">
+<img src="doc/task-file.png" alt="Screenshot of task file WDL code in Zed" width="750">
+<img src="doc/embedded-languages.png" alt="Screenshot of task file WDL code in Zed" width="750">
 
 ## Requirements
 
