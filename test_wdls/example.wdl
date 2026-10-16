@@ -35,9 +35,7 @@ workflow Workflow1 {
 
     call local.foo
     call local.foo as bar {}
-    call local.baz {
-        input:
-    }
+    call local.baz {}
     call local.qux {
         input:
             x = 1,

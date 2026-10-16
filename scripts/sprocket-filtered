@@ -3,7 +3,12 @@
 HIDE (default: Sprocket's "type mismatch: ..." errors). All arguments are passed
 to sprocket unchanged. Override the pattern with SPROCKET_HIDE_DIAGNOSTICS
 and the sprocket binary with SPROCKET_BIN."""
-import json, os, re, subprocess, sys, threading
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
 
 HIDE = re.compile(os.environ.get("SPROCKET_HIDE_DIAGNOSTICS") or r"^type mismatch")
 
