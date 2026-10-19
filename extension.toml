@@ -16,3 +16,13 @@ commit = "1674d539baf7ee4b5fb65be830e169ae35421c9b"
 [language_servers.sprocket]
 languages = ["WDL"]
 name = "Sprocket"
+
+[[capabilities]]
+kind = "process:exec"
+command = "*"
+args = ["--version"]
+
+[[capabilities]]
+kind = "download_file"
+host = "github.com"
+path = ["stjude-rust-labs", "sprocket", "**"]

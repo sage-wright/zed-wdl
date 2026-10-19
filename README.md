@@ -159,4 +159,4 @@ terminal.
 * [stjude-rust-labs/sprocket](https://github.com/stjude-rust-labs/sprocket): WDL language server and toolkit
 * [Zed](https://github.com/zed-industries/zed): the bash highlight query in
   `languages/wdl-shell/highlights.scm` comes from Zed and is licensed GPL-3.0-or-later
-  (see `languages/wdl-shell/LICENSE-GPL`)
+  (see `licenses/zed-LICENSE-GPL`)
