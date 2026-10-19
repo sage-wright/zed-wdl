@@ -1,0 +1,426 @@
+#!/usr/bin/env python3
+"""Minimal LSP server that runs ShellCheck on the `command` blocks of WDL files,
+and Ruff on the Python heredocs inside them.
+
+WDL placeholders are replaced with code of the same length so positions map
+straight back onto the WDL file. For ShellCheck, a placeholder inside double
+quotes becomes `$(: 01)`, elsewhere `${#:-001}` (two words for `sep=`
+placeholders), and in command position, single quotes or heredoc bodies a run
+of `x`. These avoid quoting (SC2086), constant-expression (SC2050/SC2078/
+SC2193), invalid-number (SC2170) and unassigned-variable (SC2154) false
+positives. For Ruff, placeholders become integer literals (`1002`), valid both
+as expressions and inside strings. Both are numbered per placeholder, so
+different placeholders don't look like a repeated test (SC2333) or duplicate
+dict keys (F601).
+
+Environment: SHELLCHECK_BIN and RUFF_BIN (either unset = that tool is off),
+SHELLCHECK_EXCLUDE (comma-separated codes), SHELLCHECK_SEVERITY
+(error/warning/info/style), RUFF_IGNORE (comma-separated codes)."""
+import json
+import os
+import re
+import subprocess
+import sys
+import threading
+from urllib.parse import unquote, urlparse
+
+SHELLCHECK = os.environ.get("SHELLCHECK_BIN")
+EXCLUDE = os.environ.get("SHELLCHECK_EXCLUDE", "")
+SEVERITY = os.environ.get("SHELLCHECK_SEVERITY", "")
+RUFF = os.environ.get("RUFF_BIN")
+RUFF_IGNORE = os.environ.get("RUFF_IGNORE", "")
+DEBOUNCE = 0.5
+
+COMMAND = re.compile(r"^[ \t]*command[ \t]*(<<<|\{)", re.M)
+# Ruff rules that flag a string as constant, which a WDL placeholder makes it look.
+PLACEHOLDER_CONSTANT_RULES = {"PLR0133", "SIM905"}
+LSP_SEVERITY = {"error": 1, "warning": 2, "info": 3, "style": 4}
+
+out_lock = threading.Lock()
+docs = {}
+timers = {}
+
+def read_msg(stream):
+    length = None
+    while True:
+        line = stream.readline()
+        if not line:
+            return None
+        line = line.strip()
+        if not line:
+            break
+        k, _, v = line.decode("ascii").partition(":")
+        if k.lower() == "content-length":
+            length = int(v)
+    return stream.read(length)
+
+def send(msg):
+    body = json.dumps(msg).encode()
+    with out_lock:
+        sys.stdout.buffer.write(b"Content-Length: %d\r\n\r\n" % len(body) + body)
+        sys.stdout.buffer.flush()
+
+def placeholder_end(text, i):
+    """Index just past the `}` closing the placeholder whose `{` is at i."""
+    depth, quote = 0, None
+    while i < len(text):
+        c = text[i]
+        if quote:
+            if c == "\\":
+                i += 1
+            elif c == quote:
+                quote = None
+        elif c in "\"'":
+            quote = c
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                return i + 1
+        i += 1
+    return len(text)
+
+def command_blocks(text):
+    """Yields (body_start_offset, body, placeholder_sigils) per command block."""
+    for m in COMMAND.finditer(text):
+        start = m.end()
+        if m.group(1) == "<<<":
+            end = start
+            while True:
+                end = text.find(">>>", end)
+                if end < 0 or text[end - 1] != "\\":
+                    break
+                end += 3
+            if end < 0:
+                end = len(text)
+            yield start, text[start:end], ("~",)
+            continue
+        i = start
+        while i < len(text):
+            c = text[i]
+            if c == "\\":
+                i += 2
+            elif c in "~$" and text.startswith("{", i + 1):
+                i = placeholder_end(text, i + 1)
+            elif c == "}":
+                break
+            else:
+                i += 1
+        yield start, text[start:i], ("~", "$")
+
+COMMAND_POSITION = re.compile(r"(^|[;&|({]|\b(if|then|elif|else|while|until|do))[ \t]*(![ \t]*)?$")
+HEREDOC = re.compile(r"""<<-?[ \t]*\\?(['"]?)([A-Za-z_][\w.-]*)\1""")
+
+def fill(ph, quote, before, num):
+    """Same-length bash for placeholder text `ph` in quoting context `quote`;
+    `before` is the bash preceding it on the same line. `num` tells different
+    placeholders apart, so `"~{a}" == x && "~{b}" == y` isn't one test twice."""
+    n = len(ph)
+
+    def digits(width):
+        return str(num).rjust(width, "0")[-width:] if width > 0 else ""
+
+    command = COMMAND_POSITION.search(before) and before.count("[") <= before.count("]")
+    if "\n" in ph or quote == "'" or n < 4 or (quote is None and command):
+        text = "x" * n
+    elif quote == '"':
+        text = "$(:" + (" " + digits(n - 5) if n >= 6 else " " * (n - 4)) + ")"
+    elif n >= 11 and re.match(r"[~$]\{\s*sep\s*=", ph):
+        text = "${#} ${#:-" + digits(n - 11) + "}"
+    elif n >= 6:
+        text = "${#:-" + digits(n - 6) + "}"
+    else:
+        text = "${#}" if n == 4 else "${##}"
+    return "".join("\n" if ch == "\n" else f for ch, f in zip(ph, text))
+
+def fill_literal(line, sigils, fill=lambda ph: "x" * len(ph)):
+    """Replaces the placeholders in one heredoc-body line with `fill(ph)`."""
+    out, i = [], 0
+    while i < len(line):
+        if line[i] in sigils and line.startswith("{", i + 1):
+            end = min(placeholder_end(line, i + 1), len(line))
+            out.append(fill(line[i:end]))
+            i = end
+        else:
+            out.append(line[i])
+            i += 1
+    return "".join(out)
+
+def is_python(prefix, line):
+    """Whether a heredoc holds Python code: fed to `python`/`pypy` with only
+    flags as arguments (`prefix` is the command text before `<<`), or written to
+    a `.py` file (`cat > x.py <<EOF`). Same rules as languages/wdl-shell/injections.scm."""
+    words = re.split(r"[;&|(]|\b(?:then|do|else)\b", prefix)[-1].split()
+    if words and re.search(r"(^|/)(python[0-9.]*|pypy[0-9]*)$", words[0]):
+        return all(w.startswith("-") for w in words[1:])
+    return bool(re.search(r">[ \t]*['\"]?[^\s'\"<>]+\.py\b", line))
+
+def to_bash(body, sigils):
+    """Replaces WDL placeholders with same-length bash, keeping newlines.
+    Also returns the Python heredocs as (first_line, end_line, strip_tabs)
+    line indexes into `body`."""
+    out, i, n = [], 0, len(body)
+    quote = None      # None, '"' or "'"
+    frames = []       # enclosing contexts of $( ) and backticks: [kind, saved_quote, depth]
+    pending = []      # (delimiter, is_python, strip_tabs) of heredocs starting on the next line
+    python = []
+    numbers = {}
+    while i < n:
+        c = body[i]
+        if c == "\n" and pending:
+            out.append(c)
+            i += 1
+            for delim, is_py, tabs in pending:
+                first = body.count("\n", 0, i)
+                last = None
+                while i < n:
+                    nl = body.find("\n", i)
+                    nl = n if nl < 0 else nl
+                    line = body[i:nl]
+                    out.append(fill_literal(line, sigils) + body[nl:nl + 1])
+                    i = nl + 1
+                    if line.strip() == delim:
+                        last = body.count("\n", 0, nl)
+                        break
+                if is_py:
+                    python.append((first, body.count("\n", 0, n) + 1 if last is None else last, tabs))
+            pending = []
+            continue
+        if c in sigils and body.startswith("{", i + 1):
+            end = placeholder_end(body, i + 1)
+            before = "".join(out[-40:]).rpartition("\n")[2]
+            num = numbers.setdefault(body[i:end], len(numbers) + 1)
+            out.append(fill(body[i:end], quote, before, num))
+            i = end
+            continue
+        if c == "\\" and quote != "'":
+            out.append(body[i : i + 2])
+            i += 2
+            continue
+        if quote is None and c == "#" and (i == 0 or body[i - 1] in " \t\n;"):
+            nl = body.find("\n", i)
+            nl = n if nl < 0 else nl
+            out.append(body[i:nl])
+            i = nl
+            continue
+        if quote is None and (m := HEREDOC.match(body, i)) and not body.startswith("<<<", i):
+            ls = body.rfind("\n", 0, i) + 1
+            le = body.find("\n", i)
+            le = n if le < 0 else le
+            pending.append((m.group(2), is_python(body[ls:i], body[ls:le]),
+                            m.group(0).startswith("<<-")))
+            out.append(m.group(0))
+            i = m.end()
+            continue
+        if quote != "'" and body.startswith("$(", i):
+            frames.append(["(", quote, 0])
+            quote = None
+            out.append("$(")
+            i += 2
+            continue
+        if quote != "'" and c == "`":
+            if frames and frames[-1][0] == "`" and quote is None:
+                quote = frames.pop()[1]
+            else:
+                frames.append(["`", quote, 0])
+                quote = None
+        elif quote is None and frames and frames[-1][0] == "(" and c in "()":
+            if c == "(":
+                frames[-1][2] += 1
+            elif frames[-1][2]:
+                frames[-1][2] -= 1
+            else:
+                quote = frames.pop()[1]
+        elif c in "\"'":
+            if quote is None:
+                quote = c
+            elif quote == c:
+                quote = None
+        out.append(c)
+        i += 1
+    return "".join(out), python
+
+def dedent(script):
+    """Strips the common leading whitespace of lines after the first, as WDL
+    does for command blocks. Returns the script and each line's removed width."""
+    lines = script.split("\n")
+    indents = [len(l) - len(l.lstrip(" \t")) for l in lines[1:] if l.strip()]
+    common = min(indents, default=0)
+    removed = [0] + [min(common, len(l) - len(l.lstrip(" \t"))) for l in lines[1:]]
+    return "\n".join(l[r:] for l, r in zip(lines, removed)), removed
+
+def utf16_col(line, col):
+    """Converts a 0-based code-point column to UTF-16 units."""
+    return sum(2 if ord(ch) > 0xFFFF else 1 for ch in line[:col])
+
+def run(args, script, cwd):
+    """Runs a linter on `script` via stdin; returns its stdout, or None."""
+    try:
+        res = subprocess.run(args, input=script.encode(), capture_output=True, cwd=cwd, timeout=20)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        print(f"wdl-command-lint: {e}", file=sys.stderr)
+        return None
+    if res.returncode > 1:
+        print(f"wdl-command-lint: {res.stderr.decode(errors='replace')}", file=sys.stderr)
+    return res.stdout
+
+def lint(uri, text):
+    if not (SHELLCHECK or RUFF):
+        return []
+    path = urlparse(uri).path
+    cwd = os.path.dirname(unquote(path)) or None
+    if cwd and not os.path.isdir(cwd):
+        cwd = None
+    lines = text.split("\n")
+    args = [SHELLCHECK, "--shell=bash", "--format=json1"]
+    if EXCLUDE:
+        args.append("--exclude=" + EXCLUDE)
+    if SEVERITY:
+        args.append("--severity=" + SEVERITY)
+    args.append("-")
+    # Ruff finds pyproject.toml / ruff.toml from this (nonexistent) file's directory.
+    ruff_args = [RUFF, "check", "--no-cache", "--output-format=json",
+                 "--stdin-filename=" + os.path.join(cwd or os.getcwd(), "wdl_command.py")]
+    if RUFF_IGNORE:
+        ruff_args.append("--ignore=" + RUFF_IGNORE)
+    ruff_args.append("-")
+    diags = []
+    for offset, body, sigils in command_blocks(text):
+        if not body.strip():
+            continue
+        line0 = text.count("\n", 0, offset)
+        col0 = offset - (text.rfind("\n", 0, offset) + 1)
+        bash, python = to_bash(body, sigils)
+        script, removed = dedent(bash)
+        if RUFF:
+            source = dedent(body)[0]
+            diags.extend(lint_python(ruff_args, cwd, source, sigils, python, removed, line0, lines))
+        if not SHELLCHECK:
+            continue
+        try:
+            comments = json.loads(run(args, script, cwd) or b"{}").get("comments", [])
+        except ValueError:
+            continue
+
+        def pos(line, col):
+            ln = line0 + line - 1
+            c = col - 1 + (col0 if line == 1 else removed[min(line, len(removed)) - 1])
+            return {"line": ln, "character": utf16_col(lines[ln] if ln < len(lines) else "", c)}
+
+        for c in comments:
+            diags.append({
+                "range": {"start": pos(c["line"], c["column"]),
+                          "end": pos(c["endLine"], c["endColumn"])},
+                "severity": LSP_SEVERITY.get(c.get("level"), 2),
+                "code": f"SC{c['code']}",
+                "codeDescription": {"href": f"https://www.shellcheck.net/wiki/SC{c['code']}"},
+                "source": "shellcheck",
+                "message": c["message"],
+            })
+    return diags
+
+def lint_python(args, cwd, source, sigils, heredocs, removed, line0, lines):
+    """Runs Ruff on each Python heredoc. `source` is the dedented command
+    block and `removed` its dedent per line."""
+    original = source.split("\n")
+    diags = []
+    numbers = {}
+
+    def number(ph):
+        n = numbers.setdefault(ph, len(numbers) + 1)
+        return ("1" + str(n).zfill(len(ph) - 1))[: len(ph)]
+
+    for first, end, tabs in heredocs:
+        rows, cut = [], []
+        for k in range(first, end):
+            row = original[k] if k < len(original) else ""
+            strip = len(row) - len(row.lstrip("\t")) if tabs else 0
+            rows.append(fill_literal(row[strip:], sigils, number))
+            cut.append(removed[k] + strip if k < len(removed) else strip)
+        if not "".join(rows).strip():
+            continue
+        try:
+            found = json.loads(run(args, "\n".join(rows) + "\n", cwd) or b"[]")
+        except ValueError:
+            continue
+
+        def pos(loc):
+            r = min(max(loc["row"], 1), len(rows)) - 1
+            ln = line0 + first + r
+            c = loc["column"] - 1 + cut[r]
+            return {"line": ln, "character": utf16_col(lines[ln] if ln < len(lines) else "", c)}
+
+        for d in found:
+            code = d.get("code")
+            if code in PLACEHOLDER_CONSTANT_RULES:
+                span = original[first + d["location"]["row"] - 1 : first + d["end_location"]["row"]]
+                if any(re.search(r"[~$]\{", row) for row in span):
+                    continue
+            syntax = code in (None, "invalid-syntax") or d.get("severity") == "error"
+            diag = {
+                "range": {"start": pos(d["location"]), "end": pos(d["end_location"])},
+                "severity": 1 if syntax else 2,
+                "source": "ruff",
+                "message": d["message"],
+            }
+            if code:
+                diag["code"] = code
+            if d.get("url"):
+                diag["codeDescription"] = {"href": d["url"]}
+            diags.append(diag)
+    return diags
+
+def publish(uri):
+    text = docs.get(uri)
+    if text is None:
+        return
+    diags = lint(uri, text)
+    if docs.get(uri) is text:
+        send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+              "params": {"uri": uri, "diagnostics": diags}})
+
+def schedule(uri, delay):
+    if (t := timers.pop(uri, None)):
+        t.cancel()
+    t = timers[uri] = threading.Timer(delay, publish, (uri,))
+    t.daemon = True
+    t.start()
+
+def main():
+    while (body := read_msg(sys.stdin.buffer)) is not None:
+        try:
+            msg = json.loads(body)
+        except ValueError:
+            continue
+        method, params, mid = msg.get("method"), msg.get("params") or {}, msg.get("id")
+        doc = params.get("textDocument", {})
+        if method == "initialize":
+            send({"jsonrpc": "2.0", "id": mid, "result": {
+                "capabilities": {"textDocumentSync": {"openClose": True, "change": 1, "save": True}},
+                "serverInfo": {"name": "wdl-command-lint"}}})
+        elif method == "textDocument/didOpen":
+            docs[doc["uri"]] = doc["text"]
+            schedule(doc["uri"], 0)
+        elif method == "textDocument/didChange":
+            changes = params.get("contentChanges") or []
+            if changes:
+                docs[doc["uri"]] = changes[-1]["text"]
+                schedule(doc["uri"], DEBOUNCE)
+        elif method == "textDocument/didSave":
+            schedule(doc["uri"], 0)
+        elif method == "textDocument/didClose":
+            docs.pop(doc["uri"], None)
+            if (t := timers.pop(doc["uri"], None)):
+                t.cancel()
+            send({"jsonrpc": "2.0", "method": "textDocument/publishDiagnostics",
+                  "params": {"uri": doc["uri"], "diagnostics": []}})
+        elif method == "shutdown":
+            send({"jsonrpc": "2.0", "id": mid, "result": None})
+        elif method == "exit":
+            break
+        elif mid is not None and method is not None:
+            send({"jsonrpc": "2.0", "id": mid,
+                  "error": {"code": -32601, "message": f"unsupported: {method}"}})
+
+main()

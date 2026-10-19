@@ -2,7 +2,11 @@
 """Run `sprocket` as an LSP server, dropping diagnostics whose message matches
 HIDE (default: Sprocket's "type mismatch: ..." errors). All arguments are passed
 to sprocket unchanged. Override the pattern with SPROCKET_HIDE_DIAGNOSTICS
-and the sprocket binary with SPROCKET_BIN."""
+and the sprocket binary with SPROCKET_BIN.
+
+Pull-diagnostic requests are passed to sprocket one at a time: Sprocket
+(0.28-0.32 at least) stops answering every request once more of them are in
+flight than the machine has CPU cores, and Zed sends one per open file."""
 import json
 import os
 import re
@@ -11,6 +15,8 @@ import sys
 import threading
 
 HIDE = re.compile(os.environ.get("SPROCKET_HIDE_DIAGNOSTICS") or r"^type mismatch")
+QUEUED_METHODS = {"textDocument/diagnostic", "workspace/diagnostic"}
+MAX_IN_FLIGHT = 1
 
 def read_msg(stream):
     length = None
@@ -40,17 +46,54 @@ def scrub(x):
         return {k: scrub(v) for k, v in x.items()}
     return x
 
-def pump(src, dst, filt):
-    while (body := read_msg(src)) is not None:
-        if filt:
-            try:
-                body = json.dumps(scrub(json.loads(body))).encode()
-            except ValueError:
-                pass
-        write_msg(dst, body)
-    dst.close()
-
 proc = subprocess.Popen([os.environ.get("SPROCKET_BIN", "sprocket"), *sys.argv[1:]], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
-threading.Thread(target=pump, args=(sys.stdin.buffer, proc.stdin, False), daemon=True).start()
-pump(proc.stdout, sys.stdout.buffer, True)
+lock = threading.Lock()  # guards the queue, in_flight and writes to proc.stdin / stdout
+queue, in_flight = [], set()
+
+def to_server(body):
+    try:
+        write_msg(proc.stdin, body)
+    except (BrokenPipeError, ValueError):
+        pass
+
+def from_client():
+    while (body := read_msg(sys.stdin.buffer)) is not None:
+        try:
+            msg = json.loads(body)
+        except ValueError:
+            msg = {}
+        with lock:
+            if msg.get("method") in QUEUED_METHODS and "id" in msg:
+                if len(in_flight) < MAX_IN_FLIGHT:
+                    in_flight.add(msg["id"])
+                    to_server(body)
+                else:
+                    queue.append((msg["id"], body))
+                continue
+            if msg.get("method") == "$/cancelRequest":
+                rid = (msg.get("params") or {}).get("id")
+                if any(i == rid for i, _ in queue):
+                    queue[:] = [(i, b) for i, b in queue if i != rid]
+                    write_msg(sys.stdout.buffer, json.dumps({"jsonrpc": "2.0", "id": rid, "error": {
+                        "code": -32800, "message": "cancelled"}}).encode())
+                    continue
+            to_server(body)
+    proc.stdin.close()
+
+threading.Thread(target=from_client, daemon=True).start()
+while (body := read_msg(proc.stdout)) is not None:
+    try:
+        msg = json.loads(body)
+        body = json.dumps(scrub(msg)).encode()
+    except ValueError:
+        msg = {}
+    with lock:
+        write_msg(sys.stdout.buffer, body)
+        if "method" not in msg and msg.get("id") in in_flight:
+            in_flight.discard(msg["id"])
+            if queue:
+                rid, queued = queue.pop(0)
+                in_flight.add(rid)
+                to_server(queued)
+sys.stdout.close()
 sys.exit(proc.wait())

@@ -14,6 +14,10 @@ use zed_extension_api::{
 /// Wrapper that drops diagnostics whose message matches a regex.
 const FILTER_SCRIPT: &str = include_str!("../scripts/sprocket-filtered");
 
+/// Language server that runs ShellCheck on command blocks and Ruff on their
+/// Python heredocs.
+const LINT_SCRIPT: &str = include_str!("../scripts/wdl-command-lint");
+
 /// Sprocket's warning-level analysis rules (hidden unless `warnings: true`).
 const WARNING_RULES: &[&str] = &[
     "UnusedImport",
@@ -193,6 +197,10 @@ impl zed::Extension for WdlExtension {
         id: &LanguageServerId,
         worktree: &zed::Worktree,
     ) -> Result<zed::Command> {
+        if id.as_ref() == "wdl-command-lint" {
+            return lint_command(id, worktree);
+        }
+
         // Everything is configured under `lsp.sprocket` in Zed settings.
         let (binary, opts) = match LspSettings::for_worktree(id.as_ref(), worktree) {
             Ok(s) => (s.binary, s.settings),
@@ -311,6 +319,200 @@ impl zed::Extension for WdlExtension {
             env: env_vars,
         })
     }
+}
+
+/// A linter the extension can download from GitHub releases.
+struct Tool {
+    name: &'static str,
+    repo: &'static str,
+}
+
+const SHELLCHECK: Tool = Tool {
+    name: "shellcheck",
+    repo: "koalaman/shellcheck",
+};
+
+const RUFF: Tool = Tool {
+    name: "ruff",
+    repo: "astral-sh/ruff",
+};
+
+impl Tool {
+    /// Release asset name for `tag` on this platform.
+    fn asset(&self, tag: &str) -> Result<(String, zed::DownloadedFileType)> {
+        let (platform, arch) = zed::current_platform();
+        let arch = match arch {
+            zed::Architecture::Aarch64 => "aarch64",
+            zed::Architecture::X8664 => "x86_64",
+            zed::Architecture::X86 => {
+                return Err(format!(
+                    "{} has no 32-bit x86 download; install it yourself and set its path",
+                    self.name
+                ))
+            }
+        };
+        let tar = zed::DownloadedFileType::GzipTar;
+        let zip = zed::DownloadedFileType::Zip;
+        Ok(match (self.name, platform) {
+            // ShellCheck's Windows zip is x86_64 only; ARM Windows runs it emulated.
+            ("shellcheck", zed::Os::Windows) => (format!("shellcheck-{tag}.zip"), zip),
+            ("shellcheck", zed::Os::Mac) => (format!("shellcheck-{tag}.darwin.{arch}.tar.gz"), tar),
+            ("shellcheck", zed::Os::Linux) => (format!("shellcheck-{tag}.linux.{arch}.tar.gz"), tar),
+            (_, zed::Os::Windows) => (format!("ruff-{arch}-pc-windows-msvc.zip"), zip),
+            (_, zed::Os::Mac) => (format!("ruff-{arch}-apple-darwin.tar.gz"), tar),
+            // The musl build is static, so it also runs on glibc and Alpine hosts.
+            (_, zed::Os::Linux) => (format!("ruff-{arch}-unknown-linux-musl.tar.gz"), tar),
+        })
+    }
+
+    fn exe(&self) -> String {
+        match zed::current_platform().0 {
+            zed::Os::Windows => format!("{}.exe", self.name),
+            _ => self.name.to_string(),
+        }
+    }
+
+    /// The executable inside `dir` or one directory below it (archives differ).
+    fn find_in(&self, dir: &str) -> Option<String> {
+        let exe = self.exe();
+        let direct = format!("{dir}/{exe}");
+        if fs::metadata(&direct).is_ok_and(|m| m.is_file()) {
+            return Some(direct);
+        }
+        fs::read_dir(dir).ok()?.flatten().find_map(|entry| {
+            let path = format!("{dir}/{}/{exe}", entry.file_name().to_str()?);
+            fs::metadata(&path).is_ok_and(|m| m.is_file()).then_some(path)
+        })
+    }
+
+    /// Version directories (`<name>-<tag>`) in the extension's working directory.
+    fn version_dirs(&self) -> Vec<String> {
+        let prefix = format!("{}-", self.name);
+        fs::read_dir(".")
+            .map(|entries| {
+                entries
+                    .flatten()
+                    .filter(|e| e.file_type().is_ok_and(|t| t.is_dir()))
+                    .filter_map(|e| e.file_name().to_str().map(String::from))
+                    .filter(|n| n.starts_with(&prefix))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Downloads (or reuses) the latest release. Returns an absolute path.
+    fn managed(&self, id: &LanguageServerId, check_for_updates: bool) -> Result<String> {
+        let installed = self.version_dirs().iter().find_map(|d| self.find_in(d));
+        if let (false, Some(path)) = (check_for_updates, &installed) {
+            return absolute(path);
+        }
+
+        zed::set_language_server_installation_status(
+            id,
+            &zed::LanguageServerInstallationStatus::CheckingForUpdate,
+        );
+        let release = match zed::latest_github_release(
+            self.repo,
+            zed::GithubReleaseOptions {
+                require_assets: true,
+                pre_release: false,
+            },
+        ) {
+            Ok(r) => r,
+            // Offline or rate-limited: keep using what's there.
+            Err(e) => return installed.map_or(Err(e), |p| absolute(&p)),
+        };
+
+        let version_dir = format!("{}-{}", self.name, release.version);
+        if let Some(path) = self.find_in(&version_dir) {
+            return absolute(&path);
+        }
+
+        let (asset_name, file_type) = self.asset(&release.version)?;
+        let asset = release
+            .assets
+            .iter()
+            .find(|a| a.name == asset_name)
+            .ok_or_else(|| format!("no {} release asset named {asset_name}", self.name))?;
+        zed::set_language_server_installation_status(
+            id,
+            &zed::LanguageServerInstallationStatus::Downloading,
+        );
+        zed::download_file(&asset.download_url, &version_dir, file_type)
+            .map_err(|e| format!("failed to download {}: {e}", self.name))?;
+        let path = self
+            .find_in(&version_dir)
+            .ok_or_else(|| format!("{asset_name} has no {}", self.exe()))?;
+        zed::make_file_executable(&path)?;
+
+        for dir in self.version_dirs() {
+            if dir != version_dir {
+                fs::remove_dir_all(&dir).ok();
+            }
+        }
+        absolute(&path)
+    }
+}
+
+/// Runs ShellCheck on command blocks and Ruff on their Python heredocs,
+/// configured under `lsp.wdl-command-lint`. With both tools disabled the
+/// server still starts but publishes nothing, so WDL users who never turn it
+/// on don't see a failed language server.
+fn lint_command(id: &LanguageServerId, worktree: &zed::Worktree) -> Result<zed::Command> {
+    let opts = LspSettings::for_worktree(id.as_ref(), worktree)
+        .ok()
+        .and_then(|s| s.settings);
+    let opts = opts.as_ref();
+    let check = get_bool(opts, "check_for_updates", true);
+
+    let python = worktree.which("python3").ok_or(
+        "python3 is needed for the wdl-command-lint language server; install it, or add \
+         \"!wdl-command-lint\" to languages.WDL.language_servers",
+    )?;
+    let script = absolute("wdl-command-lint.py")?;
+    fs::write("wdl-command-lint.py", LINT_SCRIPT).map_err(|e| e.to_string())?;
+
+    let mut env_vars = worktree.shell_env();
+    // 1. the tool's `path` setting, 2. the tool on PATH, 3. a download.
+    let binary = |tool: &Tool, tool_opts: Option<&Value>| -> Result<String> {
+        match tool_opts
+            .and_then(|o| o.get("path"))
+            .and_then(Value::as_str)
+            .map(String::from)
+            .or_else(|| worktree.which(tool.name))
+        {
+            Some(path) => Ok(path),
+            None => tool.managed(id, check),
+        }
+    };
+    let list = |tool_opts: Option<&Value>, key: &str| -> Option<String> {
+        let items = tool_opts?.get(key)?.as_array()?;
+        Some(items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","))
+    };
+
+    let sc = opts.and_then(|o| o.get("shellcheck"));
+    if get_bool(sc, "enabled", false) {
+        env_vars.push(("SHELLCHECK_BIN".into(), binary(&SHELLCHECK, sc)?));
+        if let Some(codes) = list(sc, "exclude") {
+            env_vars.push(("SHELLCHECK_EXCLUDE".into(), codes));
+        }
+        if let Some(level) = sc.and_then(|o| o.get("severity")).and_then(Value::as_str) {
+            env_vars.push(("SHELLCHECK_SEVERITY".into(), level.to_string()));
+        }
+    }
+    let ruff = opts.and_then(|o| o.get("ruff"));
+    if get_bool(ruff, "enabled", false) {
+        env_vars.push(("RUFF_BIN".into(), binary(&RUFF, ruff)?));
+        if let Some(codes) = list(ruff, "ignore") {
+            env_vars.push(("RUFF_IGNORE".into(), codes));
+        }
+    }
+
+    Ok(zed::Command {
+        command: python,
+        args: vec![script],
+        env: env_vars,
+    })
 }
 
 zed::register_extension!(WdlExtension);

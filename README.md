@@ -27,6 +27,8 @@ This extension provides support for the [Workflow Description Language (WDL)](ht
 * Automatic indentation
 * Automatic closing of brackets and quotes
 * Diagnostics from the Sprocket language server, with configurable linting and filtering
+* Optional [ShellCheck](https://www.shellcheck.net/) diagnostics for the bash in `command` blocks, and
+  [Ruff](https://docs.astral.sh/ruff/) diagnostics for the Python heredocs inside them
 * Support for `~{sep=...}`, `~{default=...}`, and `~{true=... false=....}`, and bash `~${...}` highlighted as bash inside `<<< >>>` commands
 
 ## Previews
@@ -41,6 +43,10 @@ This extension provides support for the [Workflow Description Language (WDL)](ht
   For remote development (SSH), install it on the remote machine, where Zed runs language servers.
 * **`python3`**, only if you hide diagnostics with `type_mismatches: false` or `hide_diagnostics`
   (see [Configuration](#configuration)).
+* **`python3`** on your `PATH` for the `wdl-command-lint` language server to start, even while it is
+  turned off (it then reports nothing). If you don't have `python3`, hide the server as described in
+  [Linting command blocks](#linting-command-blocks). ShellCheck and Ruff themselves are downloaded
+  automatically when you turn them on, unless they are already on your `PATH`.
 * **Language extensions for embedded code.** Python and JavaScript are built into Zed. R, Perl,
   Ruby, Julia and SQL highlighting needs the corresponding Zed extension; without it, that code is
   shown as a bash string.
@@ -108,6 +114,74 @@ the extension has turned off, and they cannot hide type mismatches.
 
 To exclude files or directories from analysis (vendored workflows, test fixtures, `draft-2` files),
 list them in a `.sprocketignore` file at the project root, using `.gitignore` syntax.
+
+### Linting command blocks
+
+The extension includes a second language server, `wdl-command-lint`, that runs
+[ShellCheck](https://www.shellcheck.net/) on the bash in each `command` block and
+[Ruff](https://docs.astral.sh/ruff/) on the Python heredocs inside them, and shows their warnings
+next to Sprocket's. Both are off by default. (Zed only uses embedded languages for highlighting, so a
+bash or Python extension's language server never sees the code inside a WDL file; this server fills
+that gap.) To turn them on:
+
+```json
+{
+  "lsp": {
+    "wdl-command-lint": {
+      "settings": {
+        "check_for_updates": true,
+        "shellcheck": {
+          "enabled": true,
+          "exclude": ["SC2164"],
+          "severity": "warning"
+        },
+        "ruff": {
+          "enabled": true,
+          "ignore": ["E722"]
+        }
+      }
+    }
+  }
+}
+```
+
+| Setting | Type | Default | Effect |
+|---|---|---|---|
+| `check_for_updates` | boolean | `true` | Checks GitHub for a newer ShellCheck or Ruff each time the server starts. Set to `false` to keep using the downloaded copy. Only applies to copies the extension downloaded. |
+| `shellcheck.enabled` | boolean | `false` | Runs ShellCheck on command blocks. |
+| `shellcheck.path` | string | | A specific `shellcheck` executable. |
+| `shellcheck.exclude` | array of strings | `[]` | ShellCheck codes to ignore, e.g. `["SC2086", "SC2164"]`. |
+| `shellcheck.severity` | string | `"style"` | Lowest level to show: `error`, `warning`, `info` or `style`. |
+| `ruff.enabled` | boolean | `false` | Runs Ruff on Python heredocs. |
+| `ruff.path` | string | | A specific `ruff` executable. |
+| `ruff.ignore` | array of strings | `[]` | Ruff rule codes to ignore, e.g. `["E722"]`. |
+
+Each tool is found in this order: its `path` setting, then your `PATH`, then a copy the extension
+downloads from the tool's GitHub releases ([ShellCheck](https://github.com/koalaman/shellcheck/releases),
+[Ruff](https://github.com/astral-sh/ruff/releases)) into its working directory. If GitHub can't be
+reached, an already-downloaded copy is used. Run `editor: restart language server` after changing
+these settings.
+
+ShellCheck reads a `.shellcheckrc` from the WDL file's directory or its parents, and
+`# shellcheck disable=SC2086` comments work inside a command block. Ruff reads `pyproject.toml` or
+`ruff.toml` the same way, and `# noqa: F401` comments work inside a heredoc.
+
+Before linting, the extension removes the command block's common indentation (as WDL does) and
+replaces each WDL placeholder with code of the same length, so placeholders don't trigger quoting or
+constant-expression warnings. In `command { }` blocks, `${...}` is a WDL placeholder too. Each command
+block is checked as its own script, and a syntax error stops ShellCheck from reporting anything else
+in that block.
+
+Heredoc bodies are data to bash, so ShellCheck only checks the `$var`, `$(...)` and backtick
+expansions in heredocs with an unquoted delimiter (`<<EOF`), and nothing in heredocs with a quoted
+one (`<<'EOF'`). Ruff checks a heredoc as Python when it is fed to `python`/`pypy` with only flags as
+arguments (`python3 <<CODE`, `python3 -u - <<CODE`) or written to a `.py` file (`cat > x.py <<EOF`).
+Ruff sees the code as written, without bash's `$` and `\` processing in unquoted heredocs. Python in
+`python3 -c "..."`, in `env python3 <<EOF` or piped into `python3`, and code in other languages (R,
+Perl, and so on) are not linted.
+
+To hide the server entirely, add `"languages": { "WDL": { "language_servers": ["...", "!wdl-command-lint"] } }`
+to your settings.
 
 ### Marking embedded-language blocks
 
