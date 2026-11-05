@@ -3,7 +3,7 @@
 ; Copyright Zed Industries, Inc.
 ;
 ; This file is licensed under the GNU General Public License, version 3 or
-; (at your option) any later version. See LICENSE-GPL in this directory.
+; (at your option) any later version. See licenses/zed-LICENSE-GPL in this repo's root directory.
 ; The rest of this extension is licensed under BSD-3-Clause (see LICENSE).
 
 [

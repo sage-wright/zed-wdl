@@ -38,21 +38,26 @@ This extension provides support for the [Workflow Description Language (WDL)](ht
 
 ## Requirements
 
-* **[Sprocket](https://github.com/stjude-rust-labs/sprocket)** on your `PATH`:
-  `brew install sprocket` or `cargo install sprocket --locked`.
-  For remote development (SSH), install it on the remote machine, where Zed runs language servers.
-* **Python 3** on your `PATH` for the `wdl-command-lint` language server to start, even while it is
+* **[Sprocket](https://github.com/stjude-rust-labs/sprocket)**, the WDL language server. The
+  extension uses `lsp.sprocket.binary.path` if set (see
+  [Overriding the Sprocket command](#overriding-the-sprocket-command)), then `sprocket` on your
+  `PATH` (`brew install sprocket` or `cargo install sprocket --locked`). Otherwise it downloads the
+  latest Sprocket release from GitHub (macOS, Linux with glibc, and Windows, on x86_64 or ARM64) and
+  checks for a newer one each time the server starts, unless `check_for_updates` is `false`. For
+  remote development (SSH), Sprocket runs on the remote machine, so install it or let the extension
+  download it there.
+* **Python 3** for the `wdl-command-lint` language server to start, even while it is
   turned off (it then reports nothing), and for Sprocket if you hide diagnostics with
   `type_mismatches: false` or `hide_diagnostics` (see [Configuration](#configuration)). Both are
   Python language servers from [wdl-lsp-tools](https://github.com/sage-wright/wdl-lsp-tools). If
   `wdl-command-lint` and `sprocket-filtered` are on your `PATH` (`uv tool install wdl-lsp-tools` or
-  `pipx install wdl-lsp-tools`), those are used; otherwise the extension downloads the latest
-  `wdl-lsp-tools.pyz` from its GitHub releases and runs it with Python. The extension looks for
-  `python3`, then `python` (on Windows, `py` first, and the Microsoft Store placeholders under
-  `WindowsApps` are skipped). Without Python, Zed reports `wdl-command-lint` as failed to start;
-  this is harmless, and you can hide the server as described in
-  [Linting command blocks](#linting-command-blocks). ShellCheck and Ruff themselves are downloaded
-  automatically when you turn them on, unless they are already on your `PATH`.
+  `pipx install wdl-lsp-tools`), those are used and bring their own Python; otherwise the extension
+  downloads the latest `wdl-lsp-tools.pyz` from its GitHub releases and runs it with Python 3 from
+  your `PATH`. The extension looks for `python3`, then `python` (on Windows, `py` first, and the
+  Microsoft Store placeholders under `WindowsApps` are skipped). Without Python, Zed reports
+  `wdl-command-lint` as failed to start; this is harmless, and you can hide the server as described
+  in [Linting command blocks](#linting-command-blocks). ShellCheck and Ruff themselves are
+  downloaded automatically when you turn them on, unless they are already on your `PATH`.
 * **Language extensions for embedded code.** Python and JavaScript are built into Zed. R, Perl,
   Ruby, Julia and SQL highlighting needs the corresponding Zed extension; without it, that code is
   shown as a bash string.
@@ -84,6 +89,7 @@ share one configuration with everyone working on a repository.
 | `lint` | boolean | `false` | Enables Sprocket's lint rules (`sprocket analyzer --lint`). |
 | `warnings` | boolean | `false` | Shows Sprocket's warning-level analysis rules: `UnusedImport`, `UnusedInput`, `UnusedDeclaration`, `UnusedCall`, `UnnecessaryFunctionCall`, `UsingFallbackVersion`. |
 | `type_mismatches` | boolean | `true` | Set to `false` to hide Sprocket's `type mismatch: ...` errors. Requires Python 3. |
+| `check_for_updates` | boolean | `true` | Checks GitHub for a newer Sprocket (and wdl-lsp-tools, when diagnostics are hidden) each time the server starts. Set to `false` to keep using the downloaded copy. Only applies to copies the extension downloaded. |
 | `except` | array of strings | `[]` | Additional Sprocket rule IDs to disable. Run `sprocket explain` for the list; Sprocket will not start if a name is unknown. |
 | `hide_diagnostics` | string (regex) | `""` | Hides any diagnostic whose message matches this regular expression. Requires Python 3. |
 
@@ -241,3 +247,5 @@ terminal.
 * [Zed](https://github.com/zed-industries/zed): the bash highlight query in
   `languages/wdl-shell/highlights.scm` comes from Zed and is licensed GPL-3.0-or-later
   (see `licenses/zed-LICENSE-GPL`)
+* [wdl-lsp-tools](https://github.com/sage-wright/wdl-lsp-tools): the `wdl-command-lint` language
+  server (ShellCheck and Ruff on command blocks) and the Sprocket diagnostic filter

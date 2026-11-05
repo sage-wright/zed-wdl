@@ -129,13 +129,22 @@ impl WdlExtension {
             id,
             &zed::LanguageServerInstallationStatus::CheckingForUpdate,
         );
-        let release = zed::latest_github_release(
+        let release = match zed::latest_github_release(
             "stjude-rust-labs/sprocket",
             zed::GithubReleaseOptions {
                 require_assets: true,
                 pre_release: false,
             },
-        )?;
+        ) {
+            Ok(r) => r,
+            // Offline or rate-limited: keep using what's there.
+            Err(e) => {
+                let path = installed.ok_or(e)?;
+                self.cached_binary = Some(path.clone());
+                let version = version_of(&path);
+                return Ok((path, version));
+            }
+        };
 
         let arch = match arch {
             zed::Architecture::Aarch64 => "aarch64",
