@@ -41,10 +41,12 @@ This extension provides support for the [Workflow Description Language (WDL)](ht
 * **[Sprocket](https://github.com/stjude-rust-labs/sprocket)** on your `PATH`:
   `brew install sprocket` or `cargo install sprocket --locked`.
   For remote development (SSH), install it on the remote machine, where Zed runs language servers.
-* **`python3`**, only if you hide diagnostics with `type_mismatches: false` or `hide_diagnostics`
-  (see [Configuration](#configuration)).
-* **`python3`** on your `PATH` for the `wdl-command-lint` language server to start, even while it is
-  turned off (it then reports nothing). If you don't have `python3`, hide the server as described in
+* **Python 3** on your `PATH` for the `wdl-command-lint` language server to start, even while it is
+  turned off (it then reports nothing), and for Sprocket if you hide diagnostics with
+  `type_mismatches: false` or `hide_diagnostics` (see [Configuration](#configuration)). The
+  extension looks for `python3`, then `python` (on Windows, `py` first, and the Microsoft Store
+  placeholders under `WindowsApps` are skipped). Without Python, Zed reports `wdl-command-lint` as
+  failed to start; this is harmless, and you can hide the server as described in
   [Linting command blocks](#linting-command-blocks). ShellCheck and Ruff themselves are downloaded
   automatically when you turn them on, unless they are already on your `PATH`.
 * **Language extensions for embedded code.** Python and JavaScript are built into Zed. R, Perl,
@@ -77,9 +79,9 @@ share one configuration with everyone working on a repository.
 |---|---|---|---|
 | `lint` | boolean | `false` | Enables Sprocket's lint rules (`sprocket analyzer --lint`). |
 | `warnings` | boolean | `false` | Shows Sprocket's warning-level analysis rules: `UnusedImport`, `UnusedInput`, `UnusedDeclaration`, `UnusedCall`, `UnnecessaryFunctionCall`, `UsingFallbackVersion`. |
-| `type_mismatches` | boolean | `true` | Set to `false` to hide Sprocket's `type mismatch: ...` errors. Requires `python3`. |
+| `type_mismatches` | boolean | `true` | Set to `false` to hide Sprocket's `type mismatch: ...` errors. Requires Python 3. |
 | `except` | array of strings | `[]` | Additional Sprocket rule IDs to disable. Run `sprocket explain` for the list; Sprocket will not start if a name is unknown. |
-| `hide_diagnostics` | string (regex) | `""` | Hides any diagnostic whose message matches this regular expression. Requires `python3`. |
+| `hide_diagnostics` | string (regex) | `""` | Hides any diagnostic whose message matches this regular expression. Requires Python 3. |
 
 Run `editor: restart language server` after changing these settings.
 
@@ -180,8 +182,9 @@ Ruff sees the code as written, without bash's `$` and `\` processing in unquoted
 `python3 -c "..."`, in `env python3 <<EOF` or piped into `python3`, and code in other languages (R,
 Perl, and so on) are not linted.
 
-To hide the server entirely, add `"languages": { "WDL": { "language_servers": ["...", "!wdl-command-lint"] } }`
-to your settings.
+To hide the server entirely (for example, if you don't have Python 3 and don't want Zed to report it
+as failed), add `"languages": { "WDL": { "language_servers": ["...", "!wdl-command-lint"] } }` to
+your settings.
 
 ### Marking embedded-language blocks
 

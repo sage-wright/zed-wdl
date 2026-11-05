@@ -7,11 +7,17 @@ authors = [
   "Sage Wright <sage.wright@theiagen.com>",
 ]
 description = "WDL 1.0–1.3 support: syntax highlighting with embedded bash/Python/R in command blocks, outline, and Sprocket LSP diagnostics."
-repository = "https://github.com/broadinstitute/zed-wdl"
+repository = "https://github.com/sage-wright/zed-wdl"
 
 [grammars.wdl]
 repository = "https://github.com/sage-wright/tree-sitter-wdl"
 commit = "1674d539baf7ee4b5fb65be830e169ae35421c9b"
+
+# Grammar for the hidden "WDL Shell" language (command blocks). v0.25.1, the
+# version Zed bundles, which languages/wdl-shell/highlights.scm was written for.
+[grammars.bash]
+repository = "https://github.com/tree-sitter/tree-sitter-bash"
+commit = "a06c2e4415e9bc0346c6b86d401879ffb44058f7"
 
 [language_servers.sprocket]
 languages = ["WDL"]

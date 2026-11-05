@@ -62,6 +62,21 @@ fn binary_version(path: &str) -> Option<(u32, u32)> {
     parse_version(&String::from_utf8_lossy(&output.stdout))
 }
 
+/// Finds a Python 3 interpreter on the worktree's PATH. Windows installs often
+/// have only `py` (the Python launcher) or `python`, and the `python3.exe` /
+/// `python.exe` under `WindowsApps` are Microsoft Store placeholders that open
+/// the Store instead of running a script, so those are skipped.
+fn find_python(worktree: &zed::Worktree) -> Option<String> {
+    let names: &[&str] = match zed::current_platform().0 {
+        zed::Os::Windows => &["py", "python3", "python"],
+        _ => &["python3", "python"],
+    };
+    names
+        .iter()
+        .filter_map(|name| worktree.which(name))
+        .find(|path| !path.to_ascii_lowercase().contains("windowsapps"))
+}
+
 /// Makes a path relative to the extension's working directory absolute.
 fn absolute(path: &str) -> Result<String> {
     if Path::new(path).is_absolute() {
@@ -302,8 +317,8 @@ impl zed::Extension for WdlExtension {
             });
         }
 
-        let python = worktree.which("python3").ok_or(
-            "python3 is needed to filter Sprocket diagnostics; install it, or set \
+        let python = find_python(worktree).ok_or(
+            "Python 3 is needed to filter Sprocket diagnostics; install it, or set \
              lsp.sprocket.settings.type_mismatches to true and hide_diagnostics to \"\"",
         )?;
         let script = absolute("sprocket-filtered.py")?;
@@ -465,8 +480,8 @@ fn lint_command(id: &LanguageServerId, worktree: &zed::Worktree) -> Result<zed::
     let opts = opts.as_ref();
     let check = get_bool(opts, "check_for_updates", true);
 
-    let python = worktree.which("python3").ok_or(
-        "python3 is needed for the wdl-command-lint language server; install it, or add \
+    let python = find_python(worktree).ok_or(
+        "Python 3 is needed for the wdl-command-lint language server; install it, or add \
          \"!wdl-command-lint\" to languages.WDL.language_servers",
     )?;
     let script = absolute("wdl-command-lint.py")?;
