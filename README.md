@@ -43,10 +43,14 @@ This extension provides support for the [Workflow Description Language (WDL)](ht
   For remote development (SSH), install it on the remote machine, where Zed runs language servers.
 * **Python 3** on your `PATH` for the `wdl-command-lint` language server to start, even while it is
   turned off (it then reports nothing), and for Sprocket if you hide diagnostics with
-  `type_mismatches: false` or `hide_diagnostics` (see [Configuration](#configuration)). The
-  extension looks for `python3`, then `python` (on Windows, `py` first, and the Microsoft Store
-  placeholders under `WindowsApps` are skipped). Without Python, Zed reports `wdl-command-lint` as
-  failed to start; this is harmless, and you can hide the server as described in
+  `type_mismatches: false` or `hide_diagnostics` (see [Configuration](#configuration)). Both are
+  Python language servers from [wdl-lsp-tools](https://github.com/sage-wright/wdl-lsp-tools). If
+  `wdl-command-lint` and `sprocket-filtered` are on your `PATH` (`uv tool install wdl-lsp-tools` or
+  `pipx install wdl-lsp-tools`), those are used; otherwise the extension downloads the latest
+  `wdl-lsp-tools.pyz` from its GitHub releases and runs it with Python. The extension looks for
+  `python3`, then `python` (on Windows, `py` first, and the Microsoft Store placeholders under
+  `WindowsApps` are skipped). Without Python, Zed reports `wdl-command-lint` as failed to start;
+  this is harmless, and you can hide the server as described in
   [Linting command blocks](#linting-command-blocks). ShellCheck and Ruff themselves are downloaded
   automatically when you turn them on, unless they are already on your `PATH`.
 * **Language extensions for embedded code.** Python and JavaScript are built into Zed. R, Perl,
@@ -149,7 +153,7 @@ that gap.) To turn them on:
 
 | Setting | Type | Default | Effect |
 |---|---|---|---|
-| `check_for_updates` | boolean | `true` | Checks GitHub for a newer ShellCheck or Ruff each time the server starts. Set to `false` to keep using the downloaded copy. Only applies to copies the extension downloaded. |
+| `check_for_updates` | boolean | `true` | Checks GitHub for a newer ShellCheck, Ruff or wdl-lsp-tools each time the server starts (wdl-lsp-tools only while ShellCheck or Ruff is enabled). Set to `false` to keep using the downloaded copy. Only applies to copies the extension downloaded. |
 | `shellcheck.enabled` | boolean | `false` | Runs ShellCheck on command blocks. |
 | `shellcheck.path` | string | | A specific `shellcheck` executable. |
 | `shellcheck.exclude` | array of strings | `[]` | ShellCheck codes to ignore, e.g. `["SC2086", "SC2164"]`. |

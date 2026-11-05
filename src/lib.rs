@@ -11,13 +11,6 @@ use zed_extension_api::{
     self as zed, serde_json::Value, settings::LspSettings, LanguageServerId, Result,
 };
 
-/// Wrapper that drops diagnostics whose message matches a regex.
-const FILTER_SCRIPT: &str = include_str!("../scripts/sprocket-filtered");
-
-/// Language server that runs ShellCheck on command blocks and Ruff on their
-/// Python heredocs.
-const LINT_SCRIPT: &str = include_str!("../scripts/wdl-command-lint");
-
 /// Sprocket's warning-level analysis rules (hidden unless `warnings: true`).
 const WARNING_RULES: &[&str] = &[
     "UnusedImport",
@@ -243,7 +236,7 @@ impl zed::Extension for WdlExtension {
         let new_config_style = version.map_or(true, |v| v >= (0, 32));
 
         // Explicit `binary.arguments` replace everything generated below.
-        let mut args = match binary.as_ref().and_then(|b| b.arguments.clone()) {
+        let args = match binary.as_ref().and_then(|b| b.arguments.clone()) {
             Some(args) => args,
             None => {
                 let mut a = vec!["analyzer".to_string(), "--stdio".to_string()];
@@ -317,26 +310,26 @@ impl zed::Extension for WdlExtension {
             });
         }
 
-        let python = find_python(worktree).ok_or(
-            "Python 3 is needed to filter Sprocket diagnostics; install it, or set \
-             lsp.sprocket.settings.type_mismatches to true and hide_diagnostics to \"\"",
+        let (command, mut wrapper_args) = lsp_tools_command(
+            id,
+            worktree,
+            "sprocket-filtered",
+            get_bool(opts, "check_for_updates", true),
+            "set lsp.sprocket.settings.type_mismatches to true and hide_diagnostics to \"\"",
         )?;
-        let script = absolute("sprocket-filtered.py")?;
-        fs::write("sprocket-filtered.py", FILTER_SCRIPT).map_err(|e| e.to_string())?;
-
         env_vars.push(("SPROCKET_BIN".into(), sprocket));
         env_vars.push(("SPROCKET_HIDE_DIAGNOSTICS".into(), hide));
-        args.insert(0, script);
+        wrapper_args.extend(args);
 
         Ok(zed::Command {
-            command: python,
-            args,
+            command,
+            args: wrapper_args,
             env: env_vars,
         })
     }
 }
 
-/// A linter the extension can download from GitHub releases.
+/// A tool the extension can download from GitHub releases.
 struct Tool {
     name: &'static str,
     repo: &'static str,
@@ -352,9 +345,19 @@ const RUFF: Tool = Tool {
     repo: "astral-sh/ruff",
 };
 
+/// The `wdl-command-lint` and `sprocket-filtered` language servers, released
+/// as a single Python zipapp (https://github.com/sage-wright/wdl-lsp-tools).
+const LSP_TOOLS: Tool = Tool {
+    name: "wdl-lsp-tools",
+    repo: "sage-wright/wdl-lsp-tools",
+};
+
 impl Tool {
     /// Release asset name for `tag` on this platform.
     fn asset(&self, tag: &str) -> Result<(String, zed::DownloadedFileType)> {
+        if self.name == LSP_TOOLS.name {
+            return Ok((self.exe(), zed::DownloadedFileType::Uncompressed));
+        }
         let (platform, arch) = zed::current_platform();
         let arch = match arch {
             zed::Architecture::Aarch64 => "aarch64",
@@ -381,6 +384,9 @@ impl Tool {
     }
 
     fn exe(&self) -> String {
+        if self.name == LSP_TOOLS.name {
+            return format!("{}.pyz", self.name);
+        }
         match zed::current_platform().0 {
             zed::Os::Windows => format!("{}.exe", self.name),
             _ => self.name.to_string(),
@@ -453,7 +459,14 @@ impl Tool {
             id,
             &zed::LanguageServerInstallationStatus::Downloading,
         );
-        zed::download_file(&asset.download_url, &version_dir, file_type)
+        // Archives unpack into `version_dir`; a single file is saved inside it.
+        let target = if matches!(file_type, zed::DownloadedFileType::Uncompressed) {
+            fs::create_dir_all(&version_dir).map_err(|e| e.to_string())?;
+            format!("{version_dir}/{}", self.exe())
+        } else {
+            version_dir.clone()
+        };
+        zed::download_file(&asset.download_url, &target, file_type)
             .map_err(|e| format!("failed to download {}: {e}", self.name))?;
         let path = self
             .find_in(&version_dir)
@@ -469,23 +482,51 @@ impl Tool {
     }
 }
 
+/// Command and leading arguments for one of the wdl-lsp-tools servers: the
+/// `server` command if wdl-lsp-tools is installed on PATH (pip, pipx or uv),
+/// otherwise the downloaded zipapp run with Python 3. `hint` says how to avoid
+/// needing the server, for the error shown when Python is missing.
+fn lsp_tools_command(
+    id: &LanguageServerId,
+    worktree: &zed::Worktree,
+    server: &str,
+    check_for_updates: bool,
+    hint: &str,
+) -> Result<(String, Vec<String>)> {
+    if let Some(path) = worktree.which(server) {
+        return Ok((path, Vec::new()));
+    }
+    let python = find_python(worktree)
+        .ok_or_else(|| format!("Python 3 is needed for {server}; install it, or {hint}"))?;
+    let pyz = LSP_TOOLS.managed(id, check_for_updates)?;
+    Ok((python, vec![pyz, server.to_string()]))
+}
+
 /// Runs ShellCheck on command blocks and Ruff on their Python heredocs,
 /// configured under `lsp.wdl-command-lint`. With both tools disabled the
-/// server still starts but publishes nothing, so WDL users who never turn it
-/// on don't see a failed language server.
+/// server still starts but publishes nothing. It still needs Python 3 and
+/// wdl-lsp-tools (on PATH, or downloaded on first start), so it can fail to
+/// start without Python or, on first start, without network access.
 fn lint_command(id: &LanguageServerId, worktree: &zed::Worktree) -> Result<zed::Command> {
     let opts = LspSettings::for_worktree(id.as_ref(), worktree)
         .ok()
         .and_then(|s| s.settings);
     let opts = opts.as_ref();
     let check = get_bool(opts, "check_for_updates", true);
+    let sc = opts.and_then(|o| o.get("shellcheck"));
+    let ruff = opts.and_then(|o| o.get("ruff"));
+    let sc_enabled = get_bool(sc, "enabled", false);
+    let ruff_enabled = get_bool(ruff, "enabled", false);
 
-    let python = find_python(worktree).ok_or(
-        "Python 3 is needed for the wdl-command-lint language server; install it, or add \
-         \"!wdl-command-lint\" to languages.WDL.language_servers",
+    // With both linters off the server only idles, so reuse a downloaded copy
+    // instead of asking GitHub for a newer release on every start.
+    let (command, args) = lsp_tools_command(
+        id,
+        worktree,
+        "wdl-command-lint",
+        check && (sc_enabled || ruff_enabled),
+        "add \"!wdl-command-lint\" to languages.WDL.language_servers",
     )?;
-    let script = absolute("wdl-command-lint.py")?;
-    fs::write("wdl-command-lint.py", LINT_SCRIPT).map_err(|e| e.to_string())?;
 
     let mut env_vars = worktree.shell_env();
     // 1. the tool's `path` setting, 2. the tool on PATH, 3. a download.
@@ -505,8 +546,7 @@ fn lint_command(id: &LanguageServerId, worktree: &zed::Worktree) -> Result<zed::
         Some(items.iter().filter_map(Value::as_str).collect::<Vec<_>>().join(","))
     };
 
-    let sc = opts.and_then(|o| o.get("shellcheck"));
-    if get_bool(sc, "enabled", false) {
+    if sc_enabled {
         env_vars.push(("SHELLCHECK_BIN".into(), binary(&SHELLCHECK, sc)?));
         if let Some(codes) = list(sc, "exclude") {
             env_vars.push(("SHELLCHECK_EXCLUDE".into(), codes));
@@ -515,8 +555,7 @@ fn lint_command(id: &LanguageServerId, worktree: &zed::Worktree) -> Result<zed::
             env_vars.push(("SHELLCHECK_SEVERITY".into(), level.to_string()));
         }
     }
-    let ruff = opts.and_then(|o| o.get("ruff"));
-    if get_bool(ruff, "enabled", false) {
+    if ruff_enabled {
         env_vars.push(("RUFF_BIN".into(), binary(&RUFF, ruff)?));
         if let Some(codes) = list(ruff, "ignore") {
             env_vars.push(("RUFF_IGNORE".into(), codes));
@@ -524,8 +563,8 @@ fn lint_command(id: &LanguageServerId, worktree: &zed::Worktree) -> Result<zed::
     }
 
     Ok(zed::Command {
-        command: python,
-        args: vec![script],
+        command,
+        args,
         env: env_vars,
     })
 }

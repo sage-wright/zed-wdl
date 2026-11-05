@@ -46,3 +46,8 @@ path = ["koalaman", "shellcheck", "**"]
 kind = "download_file"
 host = "github.com"
 path = ["astral-sh", "ruff", "**"]
+
+[[capabilities]]
+kind = "download_file"
+host = "github.com"
+path = ["sage-wright", "wdl-lsp-tools", "**"]
